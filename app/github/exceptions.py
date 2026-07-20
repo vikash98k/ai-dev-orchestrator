@@ -11,3 +11,11 @@ class GitHubConfigurationError(GitHubError):
 
 class GitHubAuthenticationError(GitHubError):
     """Raised when GitHub authentication fails."""
+
+
+class RepositoryNotFoundError(GitHubError):
+    """Raised when the requested GitHub repository does not exist."""
+
+
+class RepositoryAccessDeniedError(GitHubError):
+    """Raised when the token cannot access the requested repository."""
