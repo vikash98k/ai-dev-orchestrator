@@ -1,6 +1,6 @@
 """GitHub integration package.
 
-Provides authenticated access to the GitHub API via a reusable client.
+Provides authenticated access to the GitHub API and repository metadata.
 """
 
 from app.github.client import GitHubClient
@@ -8,11 +8,18 @@ from app.github.exceptions import (
     GitHubAuthenticationError,
     GitHubConfigurationError,
     GitHubError,
+    RepositoryAccessDeniedError,
+    RepositoryNotFoundError,
 )
+from app.github.repository_manager import RepositoryInfo, RepositoryManager
 
 __all__ = [
     "GitHubClient",
     "GitHubAuthenticationError",
     "GitHubConfigurationError",
     "GitHubError",
+    "RepositoryAccessDeniedError",
+    "RepositoryInfo",
+    "RepositoryManager",
+    "RepositoryNotFoundError",
 ]
