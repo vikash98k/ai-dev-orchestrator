@@ -1,6 +1,6 @@
 """GitHub integration package.
 
-Provides authenticated access to the GitHub API and repository metadata.
+Provides authenticated access to repositories and read-only issue operations.
 """
 
 from app.github.client import GitHubClient
@@ -9,14 +9,19 @@ from app.github.exceptions import (
     GitHubAuthenticationError,
     GitHubConfigurationError,
     GitHubError,
+    GitHubIssueError,
     GitHubRepositoryError,
+    IssueAccessDeniedError,
+    IssueNotFoundError,
+    IssueValidationError,
     RateLimitExceededError,
     RepositoryAccessDeniedError,
     RepositoryNotFoundError,
     RepositoryValidationError,
 )
+from app.github.issue_manager import IssueManager
 from app.github.repository_manager import RepositoryManager
-from app.github.schemas import RepositoryInfo
+from app.github.schemas import IssueDetail, IssueSummary, RepositoryInfo
 
 __all__ = [
     "GitHubClient",
@@ -24,7 +29,14 @@ __all__ = [
     "GitHubAuthenticationError",
     "GitHubConfigurationError",
     "GitHubError",
+    "GitHubIssueError",
     "GitHubRepositoryError",
+    "IssueAccessDeniedError",
+    "IssueDetail",
+    "IssueManager",
+    "IssueNotFoundError",
+    "IssueSummary",
+    "IssueValidationError",
     "RateLimitExceededError",
     "RepositoryAccessDeniedError",
     "RepositoryInfo",

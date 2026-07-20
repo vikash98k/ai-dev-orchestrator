@@ -1,4 +1,4 @@
-"""Temporary CLI entry point for GitHub auth and repository metadata.
+"""Temporary CLI entry point for GitHub auth and open-issue listing.
 
 Configuration is loaded dynamically from the environment::
 
@@ -24,12 +24,15 @@ from app.github import (
     GitHubAuthenticationError,
     GitHubClient,
     GitHubConfigurationError,
+    GitHubIssueError,
     GitHubRepositoryError,
-    RepositoryInfo,
+    IssueManager,
+    IssueSummary,
     RepositoryManager,
 )
 
-SEPARATOR = "=" * 51
+SEPARATOR = "=" * 54
+SECTION = "-" * 54
 
 
 def configure_logging() -> None:
@@ -43,17 +46,7 @@ def configure_logging() -> None:
 
 
 def _require_env(name: str) -> str:
-    """Return a required environment variable or raise a configuration error.
-
-    Args:
-        name: Environment variable name.
-
-    Returns:
-        Non-empty trimmed value.
-
-    Raises:
-        GitHubConfigurationError: If the variable is missing or blank.
-    """
+    """Return a required environment variable or raise a configuration error."""
     value = (os.getenv(name) or "").strip()
     if not value:
         raise GitHubConfigurationError(
@@ -63,40 +56,62 @@ def _require_env(name: str) -> str:
     return value
 
 
-def format_repository_summary(info: RepositoryInfo) -> str:
-    """Build the user-facing repository summary for the CLI.
+def format_open_issues(repo_name: str, issues: list[IssueSummary]) -> str:
+    """Build the user-facing open-issues summary for the CLI.
 
     Args:
-        info: Structured repository metadata.
+        repo_name: Repository name to display.
+        issues: Open issue summaries.
 
     Returns:
         Multi-line summary ready to print.
     """
-    fields = (
-        ("Name", info.name),
-        ("Owner", info.owner),
-        ("Visibility", info.visibility.capitalize()),
-        ("Default Branch", info.default_branch),
-        ("Language", info.language or "N/A"),
-        ("Stars", info.stars),
-        ("Forks", info.forks),
-        ("Open Issues", info.open_issues_count),
-        ("Created", info.created_at.date().isoformat()),
-        ("Updated", info.updated_at.date().isoformat()),
-    )
     lines = [
-        "✓ Repository Found",
+        "Repository",
         "",
-        "Repository Information",
+        repo_name,
+        "",
+        SECTION,
+        "",
+        "Open Issues",
         "",
     ]
-    for label, value in fields:
-        lines.extend([f"{label}:", str(value), ""])
+
+    if not issues:
+        lines.extend(["(none)", "", "Total Open Issues: 0", ""])
+        return "\n".join(lines)
+
+    for issue in issues:
+        assignee = issue.assignees[0] if issue.assignees else "Unassigned"
+        labels = "\n".join(issue.labels) if issue.labels else "(none)"
+        lines.extend(
+            [
+                f"#{issue.number}",
+                "",
+                "Title:",
+                issue.title,
+                "",
+                "Labels:",
+                labels,
+                "",
+                "Assignee:",
+                assignee,
+                "",
+                "Created:",
+                issue.created_at.date().isoformat(),
+                "",
+                SECTION,
+                "",
+            ]
+        )
+
+    lines.append(f"Total Open Issues: {len(issues)}")
+    lines.append("")
     return "\n".join(lines)
 
 
 def main() -> int:
-    """Authenticate, load repository metadata, and print a summary.
+    """Authenticate, list open issues, and print a summary.
 
     Returns:
         Process exit code (``0`` on success, ``1`` on failure).
@@ -109,28 +124,25 @@ def main() -> int:
     print()
     print("AI Dev Orchestrator")
     print()
-    print("Connecting to GitHub...")
-    print()
 
     try:
         client = GitHubClient(load_env=False)
         client.verify_connection()
-        print("✓ Authentication Successful")
+        print("✓ Connected to GitHub")
         print()
 
         owner = _require_env("GITHUB_OWNER")
         repo = _require_env("GITHUB_REPO")
 
-        print("Loading Repository...")
-        print()
-
-        manager = RepositoryManager(client)
-        info = manager.get_repository_info(owner, repo)
+        repository_manager = RepositoryManager(client)
+        issue_manager = IssueManager(repository_manager)
+        open_issues = issue_manager.list_open_issues(owner, repo)
     except (
         GitHubConfigurationError,
         GitHubAuthenticationError,
         GitHubAPIError,
         GitHubRepositoryError,
+        GitHubIssueError,
     ) as exc:
         logger.error("Orchestrator failed: %s", exc)
         print("✗ Failed")
@@ -139,7 +151,7 @@ def main() -> int:
         print(SEPARATOR)
         return 1
 
-    print(format_repository_summary(info))
+    print(format_open_issues(repo, open_issues))
     print(SEPARATOR)
     return 0
 

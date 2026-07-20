@@ -1,4 +1,4 @@
-"""Pydantic schemas for GitHub repository metadata.
+"""Pydantic schemas for GitHub repository and issue metadata.
 
 These models are the stable contract between the infrastructure layer and
 future application services (issues, PRs, branches, workflows).
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from github.Issue import Issue
 from github.Repository import Repository
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -85,4 +86,75 @@ class RepositoryInfo(BaseModel):
             archived=repository.archived,
             disabled=repository.disabled,
             topics=topics,
+        )
+
+
+class IssueSummary(BaseModel):
+    """Lightweight issue representation for lists and filters."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    number: int = Field(description="Issue number")
+    title: str = Field(description="Issue title")
+    state: str = Field(description="open or closed")
+    labels: list[str] = Field(default_factory=list, description="Label names")
+    assignees: list[str] = Field(
+        default_factory=list,
+        description="Assignee logins",
+    )
+    milestone: str | None = Field(default=None, description="Milestone title")
+    author: str = Field(description="Author login")
+    created_at: datetime = Field(description="Creation timestamp")
+    updated_at: datetime = Field(description="Last update timestamp")
+    url: str = Field(description="GitHub HTML URL")
+
+    @classmethod
+    def from_issue(cls, issue: Issue) -> IssueSummary:
+        """Map a PyGithub ``Issue`` into an :class:`IssueSummary`.
+
+        Args:
+            issue: Authenticated PyGithub issue object.
+
+        Returns:
+            Immutable summary model.
+        """
+        return cls(
+            number=issue.number,
+            title=issue.title,
+            state=issue.state,
+            labels=[label.name for label in issue.labels],
+            assignees=[user.login for user in issue.assignees],
+            milestone=issue.milestone.title if issue.milestone else None,
+            author=issue.user.login if issue.user else "unknown",
+            created_at=issue.created_at,
+            updated_at=issue.updated_at,
+            url=issue.html_url,
+        )
+
+
+class IssueDetail(IssueSummary):
+    """Full issue representation including body and pull-request flag."""
+
+    body: str | None = Field(default=None, description="Issue body markdown")
+    comments_count: int = Field(description="Comment count")
+    is_pull_request: bool = Field(
+        description="True when the GitHub issue item is a pull request",
+    )
+
+    @classmethod
+    def from_issue(cls, issue: Issue) -> IssueDetail:
+        """Map a PyGithub ``Issue`` into an :class:`IssueDetail`.
+
+        Args:
+            issue: Authenticated PyGithub issue object.
+
+        Returns:
+            Immutable detail model.
+        """
+        summary = IssueSummary.from_issue(issue)
+        return cls(
+            **summary.model_dump(),
+            body=issue.body,
+            comments_count=issue.comments,
+            is_pull_request=issue.pull_request is not None,
         )
