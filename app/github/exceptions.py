@@ -38,3 +38,19 @@ class RateLimitExceededError(GitHubAPIError):
 
     Placeholder for a future retry/backoff strategy in the workflow engine.
     """
+
+
+class GitHubIssueError(GitHubError):
+    """Base exception for issue-scoped failures."""
+
+
+class IssueNotFoundError(GitHubIssueError):
+    """Raised when the requested GitHub issue does not exist."""
+
+
+class IssueAccessDeniedError(GitHubIssueError):
+    """Raised when the token cannot access the requested issue."""
+
+
+class IssueValidationError(GitHubIssueError):
+    """Raised when issue query inputs are invalid."""
