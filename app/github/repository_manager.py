@@ -88,7 +88,7 @@ class RepositoryManager:
         try:
             self.get_repository(owner, repo)
             return True
-        except (GitHubRepositoryError, GitHubAPIError, ValueError) as exc:
+        except (GitHubRepositoryError, GitHubAPIError) as exc:
             logger.info(
                 "Repository existence check failed",
                 extra={
