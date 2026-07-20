@@ -71,7 +71,7 @@ class GitHubClient:
             GitHubAuthenticationError: If the token cannot create a session.
         """
         if load_env:
-            load_dotenv()
+            load_dotenv(override=True)
             logger.debug("Loaded environment variables from .env if present")
 
         self._token = token or os.getenv("GITHUB_TOKEN")
@@ -100,6 +100,80 @@ class GitHubClient:
         """
         return self._client
 
+    def execute_graphql(
+        self,
+        query: str,
+        variables: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Execute a GitHub GraphQL query via the authenticated client.
+
+        Required for Project V2 and other GraphQL-only resources.
+
+        Args:
+            query: GraphQL query string.
+            variables: Optional GraphQL variables.
+
+        Returns:
+            The ``data`` object from the GraphQL response.
+
+        Raises:
+            RateLimitExceededError: If the API rate limit is exceeded.
+            GitHubAPIError: For GraphQL, network, or unexpected failures.
+        """
+        try:
+            _headers, payload = self._client._Github__requester.graphql_query(
+                query=query,
+                variables=variables or {},
+            )
+        except RateLimitExceededException as exc:
+            logger.error(
+                "Unexpected API failures",
+                extra={"status": exc.status, "kind": "rate_limit"},
+            )
+            raise RateLimitExceededError(
+                "GitHub API rate limit exceeded during GraphQL request."
+            ) from exc
+        except UnknownObjectException as exc:
+            logger.error(
+                "Unexpected API failures",
+                extra={"status": exc.status, "kind": "not_found", "detail": str(exc)},
+            )
+            raise GitHubAPIError(
+                f"GitHub GraphQL resource not found (status={exc.status}): {exc.data}"
+            ) from exc
+        except GithubException as exc:
+            logger.error(
+                "Unexpected API failures",
+                extra={"status": exc.status, "detail": str(exc)},
+            )
+            raise GitHubAPIError(
+                f"GitHub GraphQL request failed (status={exc.status}): {exc.data}"
+            ) from exc
+        except RequestException as exc:
+            logger.error(
+                "Unexpected API failures",
+                extra={"detail": str(exc), "kind": "network"},
+            )
+            raise GitHubAPIError(
+                f"Network failure during GitHub GraphQL request: {exc}"
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise GitHubAPIError("Unexpected GraphQL response payload type.")
+
+        errors = payload.get("errors")
+        if errors:
+            logger.error(
+                "Unexpected API failures",
+                extra={"graphql_errors": errors},
+            )
+            raise GitHubAPIError(f"GitHub GraphQL returned errors: {errors}")
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise GitHubAPIError("GitHub GraphQL response missing data object.")
+        return data
+
     def verify_connection(self) -> AuthenticatedUser:
         """Verify authentication by fetching the authenticated user.
 
@@ -123,7 +197,7 @@ class GitHubClient:
         except GithubException as exc:
             logger.error(
                 "GitHub authentication failed",
-                extra={"status": exc.status, "message": str(exc)},
+                extra={"status": exc.status, "detail": str(exc)},
             )
             raise GitHubAuthenticationError(
                 f"GitHub authentication failed (status={exc.status}): {exc.data}"
@@ -193,7 +267,7 @@ class GitHubClient:
                 extra={
                     "repository": full_name,
                     "status": status,
-                    "message": str(exc),
+                    "detail": str(exc),
                 },
             )
             raise GitHubAPIError(
@@ -203,7 +277,7 @@ class GitHubClient:
         except RequestException as exc:
             logger.error(
                 "Unexpected API errors",
-                extra={"repository": full_name, "message": str(exc)},
+                extra={"repository": full_name, "detail": str(exc)},
             )
             raise GitHubAPIError(
                 f"Network failure while accessing repository '{full_name}': {exc}"

@@ -1,6 +1,6 @@
 """GitHub integration package.
 
-Provides authenticated access to repositories and read-only issue operations.
+Provides authenticated access to repositories, issues, and Project V2 boards.
 """
 
 from app.github.client import GitHubClient
@@ -10,18 +10,31 @@ from app.github.exceptions import (
     GitHubConfigurationError,
     GitHubError,
     GitHubIssueError,
+    GitHubProjectError,
     GitHubRepositoryError,
     IssueAccessDeniedError,
     IssueNotFoundError,
     IssueValidationError,
+    ProjectAccessDeniedError,
+    ProjectItemNotFoundError,
+    ProjectNotFoundError,
+    ProjectValidationError,
     RateLimitExceededError,
     RepositoryAccessDeniedError,
     RepositoryNotFoundError,
     RepositoryValidationError,
 )
 from app.github.issue_manager import IssueManager
+from app.github.project_manager import ProjectBoardManager
 from app.github.repository_manager import RepositoryManager
-from app.github.schemas import IssueDetail, IssueSummary, RepositoryInfo
+from app.github.schemas import (
+    IssueDetail,
+    IssueSummary,
+    ProjectBoard,
+    ProjectInfo,
+    ProjectItem,
+    RepositoryInfo,
+)
 
 __all__ = [
     "GitHubClient",
@@ -30,6 +43,7 @@ __all__ = [
     "GitHubConfigurationError",
     "GitHubError",
     "GitHubIssueError",
+    "GitHubProjectError",
     "GitHubRepositoryError",
     "IssueAccessDeniedError",
     "IssueDetail",
@@ -37,6 +51,14 @@ __all__ = [
     "IssueNotFoundError",
     "IssueSummary",
     "IssueValidationError",
+    "ProjectAccessDeniedError",
+    "ProjectBoard",
+    "ProjectBoardManager",
+    "ProjectInfo",
+    "ProjectItem",
+    "ProjectItemNotFoundError",
+    "ProjectNotFoundError",
+    "ProjectValidationError",
     "RateLimitExceededError",
     "RepositoryAccessDeniedError",
     "RepositoryInfo",

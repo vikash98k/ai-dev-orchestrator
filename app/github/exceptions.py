@@ -54,3 +54,23 @@ class IssueAccessDeniedError(GitHubIssueError):
 
 class IssueValidationError(GitHubIssueError):
     """Raised when issue query inputs are invalid."""
+
+
+class GitHubProjectError(GitHubError):
+    """Base exception for GitHub Project V2 failures."""
+
+
+class ProjectNotFoundError(GitHubProjectError):
+    """Raised when the requested GitHub Project V2 does not exist."""
+
+
+class ProjectItemNotFoundError(GitHubProjectError):
+    """Raised when a project item for an issue cannot be found."""
+
+
+class ProjectAccessDeniedError(GitHubProjectError):
+    """Raised when the token cannot access the requested project."""
+
+
+class ProjectValidationError(GitHubProjectError):
+    """Raised when project query inputs are invalid."""

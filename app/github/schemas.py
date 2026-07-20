@@ -158,3 +158,48 @@ class IssueDetail(IssueSummary):
             comments_count=issue.comments,
             is_pull_request=issue.pull_request is not None,
         )
+
+
+class ProjectInfo(BaseModel):
+    """Metadata for a GitHub Project V2 board."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(description="Project node ID")
+    title: str = Field(description="Project title")
+    number: int = Field(description="Project number")
+    owner: str = Field(description="Owner login")
+    url: str = Field(description="Project URL")
+
+
+class ProjectItem(BaseModel):
+    """A Project V2 item linked to an issue, with workflow fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    issue_number: int = Field(description="Linked issue number")
+    issue_title: str = Field(description="Linked issue title")
+    status: str | None = Field(default=None, description="Status field value")
+    labels: list[str] = Field(default_factory=list, description="Issue labels")
+    assignees: list[str] = Field(default_factory=list, description="Assignee logins")
+    milestone: str | None = Field(default=None, description="Milestone title")
+    priority: str | None = Field(default=None, description="Priority field value")
+    iteration: str | None = Field(default=None, description="Iteration field value")
+    created_at: datetime | None = Field(
+        default=None,
+        description="Issue creation timestamp",
+    )
+    updated_at: datetime | None = Field(
+        default=None,
+        description="Issue last update timestamp",
+    )
+
+
+class ProjectBoard(BaseModel):
+    """Full project board snapshot for workflow consumption."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project: ProjectInfo = Field(description="Project metadata")
+    items: list[ProjectItem] = Field(default_factory=list, description="Board items")
+    total_items: int = Field(description="Total item count")

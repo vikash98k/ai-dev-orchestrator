@@ -117,13 +117,18 @@ class IssueManager:
         repository = self._repository_manager.get_repository(owner, repo)
         full_name = f"{owner}/{repo}"
         logger.info(
-            "Loading issues",
+            "Loading issue",
             extra={"repository": full_name, "issue_number": issue_number},
         )
 
         try:
             issue = repository.get_issue(issue_number)
-        except Exception as exc:
+        except (
+            UnknownObjectException,
+            RateLimitExceededException,
+            GithubException,
+            RequestException,
+        ) as exc:
             self._raise_for_issue_error(exc, full_name, issue_number=issue_number)
 
         detail = IssueDetail.from_issue(issue)
@@ -264,7 +269,7 @@ class IssueManager:
             if issue.pull_request is None
         ]
         logger.info(
-            "Issue loaded",
+            "Issues loaded",
             extra={
                 "repository": f"{owner}/{repo}",
                 "state": state,
@@ -302,7 +307,12 @@ class IssueManager:
 
         try:
             return list(repository.get_issues(**kwargs))
-        except Exception as exc:
+        except (
+            UnknownObjectException,
+            RateLimitExceededException,
+            GithubException,
+            RequestException,
+        ) as exc:
             self._raise_for_issue_error(exc, full_name)
             raise  # pragma: no cover
 
@@ -360,7 +370,7 @@ class IssueManager:
                 ) from exc
             logger.error(
                 "GitHub API failures",
-                extra={"target": target, "status": status, "message": str(exc)},
+                extra={"target": target, "status": status, "detail": str(exc)},
             )
             raise GitHubAPIError(
                 f"Unexpected GitHub API error for issues on '{target}' "
@@ -370,16 +380,12 @@ class IssueManager:
         if isinstance(exc, RequestException):
             logger.error(
                 "GitHub API failures",
-                extra={"target": target, "message": str(exc), "kind": "network"},
+                extra={"target": target, "detail": str(exc), "kind": "network"},
             )
             raise GitHubAPIError(
                 f"Network failure while accessing issues for '{target}': {exc}"
             ) from exc
 
-        logger.error(
-            "GitHub API failures",
-            extra={"target": target, "message": str(exc), "kind": type(exc).__name__},
+        raise AssertionError(
+            f"Unhandled exception type passed to _raise_for_issue_error: {type(exc)!r}"
         )
-        raise GitHubAPIError(
-            f"Unexpected error while accessing issues for '{target}': {exc}"
-        ) from exc
