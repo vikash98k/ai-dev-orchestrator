@@ -13,6 +13,10 @@ class GitHubAuthenticationError(GitHubError):
     """Raised when GitHub authentication fails."""
 
 
+class GitHubAPIError(GitHubError):
+    """Raised for unexpected or transient GitHub API failures."""
+
+
 class RepositoryNotFoundError(GitHubError):
     """Raised when the requested GitHub repository does not exist."""
 

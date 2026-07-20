@@ -1,8 +1,8 @@
 """Reusable GitHub client for authenticated API access.
 
 This module belongs to the infrastructure layer. It wraps PyGithub and exposes
-a narrow authentication surface that higher-level application services can
-depend on without coupling to PyGithub internals.
+a narrow authentication and repository-fetch surface that higher-level
+application services can depend on without coupling to PyGithub internals.
 """
 
 from __future__ import annotations
@@ -13,10 +13,14 @@ from typing import TypedDict
 
 from dotenv import load_dotenv
 from github import Auth, Github, GithubException
+from github.Repository import Repository
 
 from app.github.exceptions import (
+    GitHubAPIError,
     GitHubAuthenticationError,
     GitHubConfigurationError,
+    RepositoryAccessDeniedError,
+    RepositoryNotFoundError,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +40,7 @@ class GitHubClient:
         - Load ``GITHUB_TOKEN`` from the environment
         - Create an authenticated PyGithub ``Github`` instance
         - Verify the connection by fetching the authenticated user
+        - Fetch repositories and translate PyGithub errors into domain errors
         - Expose the authenticated client for future use
 
     Example:
@@ -119,4 +124,44 @@ class GitHubClient:
             logger.exception("Unexpected error while verifying GitHub connection")
             raise GitHubAuthenticationError(
                 f"Unexpected error verifying GitHub connection: {exc}"
+            ) from exc
+
+    def get_repository(self, full_name: str) -> Repository:
+        """Fetch a repository by its ``owner/repo`` full name.
+
+        Args:
+            full_name: Repository identifier in ``owner/repo`` form.
+
+        Returns:
+            The authenticated PyGithub ``Repository`` object.
+
+        Raises:
+            RepositoryNotFoundError: If the repository does not exist.
+            RepositoryAccessDeniedError: If the token cannot access it.
+            GitHubAPIError: For unexpected or transient API failures.
+        """
+        try:
+            return self._client.get_repo(full_name)
+        except GithubException as exc:
+            status = exc.status
+            logger.error(
+                "GitHub repository request failed",
+                extra={
+                    "repository": full_name,
+                    "status": status,
+                    "message": str(exc),
+                },
+            )
+            if status == 404:
+                raise RepositoryNotFoundError(
+                    f"Repository '{full_name}' was not found."
+                ) from exc
+            if status in {401, 403}:
+                raise RepositoryAccessDeniedError(
+                    f"Access denied for repository '{full_name}' "
+                    f"(status={status}). Check token permissions."
+                ) from exc
+            raise GitHubAPIError(
+                f"Unexpected GitHub API error for repository '{full_name}' "
+                f"(status={status}): {exc.data}"
             ) from exc

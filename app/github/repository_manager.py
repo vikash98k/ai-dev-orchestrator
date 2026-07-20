@@ -1,8 +1,8 @@
 """Reusable repository manager for GitHub repository access.
 
 This module belongs to the infrastructure layer. It depends on
-:class:`~app.github.client.GitHubClient` for authentication and exposes a
-narrow repository surface for higher-level application services.
+:class:`~app.github.client.GitHubClient` for authentication and repository
+fetching, and exposes a narrow metadata surface for higher-level services.
 """
 
 from __future__ import annotations
@@ -11,14 +11,9 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from github import GithubException
 from github.Repository import Repository
 
 from app.github.client import GitHubClient
-from app.github.exceptions import (
-    RepositoryAccessDeniedError,
-    RepositoryNotFoundError,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +37,33 @@ class RepositoryInfo:
     ssh_url: str
     private: bool
 
+    @classmethod
+    def from_repository(cls, repository: Repository) -> RepositoryInfo:
+        """Map a PyGithub ``Repository`` into a structured metadata model.
+
+        Args:
+            repository: Authenticated PyGithub repository object.
+
+        Returns:
+            Immutable :class:`RepositoryInfo` populated from the API object.
+        """
+        return cls(
+            name=repository.name,
+            owner=repository.owner.login,
+            description=repository.description,
+            default_branch=repository.default_branch,
+            visibility=repository.visibility,
+            stars=repository.stargazers_count,
+            forks=repository.forks_count,
+            open_issues_count=repository.open_issues_count,
+            language=repository.language,
+            created_at=repository.created_at,
+            updated_at=repository.updated_at,
+            clone_url=repository.clone_url,
+            ssh_url=repository.ssh_url,
+            private=repository.private,
+        )
+
 
 class RepositoryManager:
     """Access and inspect GitHub repositories.
@@ -49,7 +71,7 @@ class RepositoryManager:
     Responsibilities:
         - Fetch repository objects via the authenticated client
         - Validate that a repository exists and is accessible
-        - Map repository metadata into a structured model
+        - Expose structured repository metadata
 
     Example:
         >>> github = GitHubClient()
@@ -63,7 +85,8 @@ class RepositoryManager:
 
         Args:
             github_client: Injected :class:`GitHubClient` instance used for
-                all API calls. Authentication remains the client's concern.
+                all API calls. Authentication and error translation remain
+                the client's concern.
         """
         self._github_client = github_client
         logger.debug("RepositoryManager initialized")
@@ -81,17 +104,13 @@ class RepositoryManager:
         Raises:
             RepositoryNotFoundError: If the repository does not exist.
             RepositoryAccessDeniedError: If the token cannot access it.
+            GitHubAPIError: For unexpected or transient API failures.
         """
         full_name = f"{owner}/{repo}"
         logger.info("Fetching repository", extra={"repository": full_name})
-
-        try:
-            repository = self._github_client.get_client().get_repo(full_name)
-            logger.info("Repository found", extra={"repository": full_name})
-            return repository
-        except GithubException as exc:
-            self._raise_for_github_error(exc, full_name)
-            raise  # pragma: no cover - unreachable, satisfies type checkers
+        repository = self._github_client.get_repository(full_name)
+        logger.info("Repository found", extra={"repository": full_name})
+        return repository
 
     def get_repository_info(self, owner: str, repo: str) -> RepositoryInfo:
         """Fetch and map repository metadata.
@@ -106,24 +125,10 @@ class RepositoryManager:
         Raises:
             RepositoryNotFoundError: If the repository does not exist.
             RepositoryAccessDeniedError: If the token cannot access it.
+            GitHubAPIError: For unexpected or transient API failures.
         """
         repository = self.get_repository(owner, repo)
-        info = RepositoryInfo(
-            name=repository.name,
-            owner=repository.owner.login,
-            description=repository.description,
-            default_branch=repository.default_branch,
-            visibility=repository.visibility,
-            stars=repository.stargazers_count,
-            forks=repository.forks_count,
-            open_issues_count=repository.open_issues_count,
-            language=repository.language,
-            created_at=repository.created_at,
-            updated_at=repository.updated_at,
-            clone_url=repository.clone_url,
-            ssh_url=repository.ssh_url,
-            private=repository.private,
-        )
+        info = RepositoryInfo.from_repository(repository)
         logger.info(
             "Repository metadata loaded",
             extra={
@@ -133,37 +138,3 @@ class RepositoryManager:
             },
         )
         return info
-
-    @staticmethod
-    def _raise_for_github_error(exc: GithubException, full_name: str) -> None:
-        """Translate PyGithub errors into domain exceptions.
-
-        Args:
-            exc: The underlying PyGithub exception.
-            full_name: ``owner/repo`` identifier used in error messages.
-
-        Raises:
-            RepositoryNotFoundError: On HTTP 404.
-            RepositoryAccessDeniedError: On HTTP 401 or 403.
-            RepositoryAccessDeniedError: For other unexpected API failures.
-        """
-        status = exc.status
-        logger.error(
-            "GitHub repository request failed",
-            extra={"repository": full_name, "status": status, "message": str(exc)},
-        )
-
-        if status == 404:
-            raise RepositoryNotFoundError(
-                f"Repository '{full_name}' was not found."
-            ) from exc
-
-        if status in {401, 403}:
-            raise RepositoryAccessDeniedError(
-                f"Access denied for repository '{full_name}' "
-                f"(status={status}). Check token permissions."
-            ) from exc
-
-        raise RepositoryAccessDeniedError(
-            f"Failed to access repository '{full_name}' (status={status}): {exc.data}"
-        ) from exc

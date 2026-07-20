@@ -20,10 +20,12 @@ import sys
 from dotenv import load_dotenv
 
 from app.github import (
+    GitHubAPIError,
     GitHubAuthenticationError,
     GitHubClient,
     GitHubConfigurationError,
     RepositoryAccessDeniedError,
+    RepositoryInfo,
     RepositoryManager,
     RepositoryNotFoundError,
 )
@@ -62,6 +64,30 @@ def _require_env(name: str) -> str:
     return value
 
 
+def format_repository_summary(info: RepositoryInfo) -> str:
+    """Build the user-facing repository summary for the CLI.
+
+    Args:
+        info: Structured repository metadata.
+
+    Returns:
+        Multi-line summary ready to print.
+    """
+    fields = (
+        ("Name", info.name),
+        ("Owner", info.owner),
+        ("Default Branch", info.default_branch),
+        ("Visibility", info.visibility.capitalize()),
+        ("Language", info.language or "N/A"),
+        ("Stars", info.stars),
+        ("Open Issues", info.open_issues_count),
+    )
+    lines = ["✓ Repository Found", "", "Repository", ""]
+    for label, value in fields:
+        lines.extend([f"{label}:", str(value), ""])
+    return "\n".join(lines)
+
+
 def main() -> int:
     """Authenticate, load repository metadata, and print a summary.
 
@@ -96,6 +122,7 @@ def main() -> int:
     except (
         GitHubConfigurationError,
         GitHubAuthenticationError,
+        GitHubAPIError,
         RepositoryNotFoundError,
         RepositoryAccessDeniedError,
     ) as exc:
@@ -106,31 +133,7 @@ def main() -> int:
         print(SEPARATOR)
         return 1
 
-    print("✓ Repository Found")
-    print()
-    print("Repository")
-    print()
-    print("Name:")
-    print(info.name)
-    print()
-    print("Owner:")
-    print(info.owner)
-    print()
-    print("Default Branch:")
-    print(info.default_branch)
-    print()
-    print("Visibility:")
-    print(info.visibility.capitalize())
-    print()
-    print("Language:")
-    print(info.language or "N/A")
-    print()
-    print("Stars:")
-    print(info.stars)
-    print()
-    print("Open Issues:")
-    print(info.open_issues_count)
-    print()
+    print(format_repository_summary(info))
     print(SEPARATOR)
     return 0
 
