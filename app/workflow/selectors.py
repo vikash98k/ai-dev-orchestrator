@@ -8,6 +8,7 @@ story points, dependency graphs) can plug in without changing the engine.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -88,9 +89,9 @@ class FIFOSelector:
         return "Lowest Issue Number"
 
     def score(self, candidate: WorkflowCandidate) -> float:
-        # Invert issue number into a descending preference within a safe band.
+        # Smooth inverse so higher numbers remain ordered (no hard clamp at 100).
         number = max(candidate.issue_number, 1)
-        return max(0.0, 100.0 - min(number, 100))
+        return 100.0 / math.sqrt(number)
 
 
 class PrioritySelector(PriorityFirstSelector):
@@ -116,6 +117,41 @@ class RandomSelector:
         return 0.0
 
 
+def make_selector(strategy: str) -> TaskSelector:
+    """Build a selector by strategy name.
+
+    Supported values: ``priority``, ``priority_first``, ``oldest``,
+    ``oldest_first``, ``fifo``, ``random``.
+    """
+    key = strategy.strip().casefold()
+    if key in {"priority", "priority_first"}:
+        return PriorityFirstSelector()
+    if key in {"oldest", "oldest_first"}:
+        return OldestFirstSelector()
+    if key == "fifo":
+        return FIFOSelector()
+    if key == "random":
+        return RandomSelector()
+    raise WorkflowConfigurationError(f"Unknown selector strategy: {strategy}")
+
+
+def _normalize_selectors(
+    pairs: list[tuple[TaskSelector, float]],
+) -> list[tuple[TaskSelector, float]]:
+    """Validate weights and return normalized ``(selector, weight)`` pairs."""
+    if not pairs:
+        raise WorkflowConfigurationError(
+            "CompositeSelector requires at least one selector."
+        )
+    for selector, weight in pairs:
+        if weight <= 0:
+            raise WorkflowConfigurationError(
+                f"Selector weight for {selector.name!r} must be positive."
+            )
+    total = sum(weight for _, weight in pairs)
+    return [(selector, weight / total) for selector, weight in pairs]
+
+
 class CompositeSelector:
     """Weighted combination of multiple :class:`TaskSelector` strategies."""
 
@@ -132,21 +168,12 @@ class CompositeSelector:
             WorkflowConfigurationError: If no selectors or invalid weights.
         """
         pairs = selectors or [
-            (PriorityFirstSelector(), 0.5),
-            (OldestFirstSelector(), 0.3),
-            (FIFOSelector(), 0.2),
+            (make_selector("priority"), 0.5),
+            (make_selector("oldest"), 0.3),
+            (make_selector("fifo"), 0.2),
         ]
-        if not pairs:
-            raise WorkflowConfigurationError(
-                "CompositeSelector requires at least one selector."
-            )
-        for selector, weight in pairs:
-            if weight <= 0:
-                raise WorkflowConfigurationError(
-                    f"Selector weight for {selector.name!r} must be positive."
-                )
-        total = sum(weight for _, weight in pairs)
-        self._selectors = [(selector, weight / total) for selector, weight in pairs]
+        self._selectors = _normalize_selectors(pairs)
+        self._last_scores: dict[int, dict[str, float]] = {}
 
     @property
     def name(self) -> str:
@@ -154,11 +181,13 @@ class CompositeSelector:
 
     def score(self, candidate: WorkflowCandidate) -> float:
         total = 0.0
+        per_selector: dict[str, float] = {}
         for selector, weight in self._selectors:
             part = selector.score(candidate)
+            per_selector[selector.name] = part
             total += part * weight
             logger.debug(
-                "Selection score",
+                "Strategy selection score",
                 extra={
                     "issue_number": candidate.issue_number,
                     "selector": selector.name,
@@ -166,14 +195,17 @@ class CompositeSelector:
                     "weight": weight,
                 },
             )
+        self._last_scores[candidate.issue_number] = per_selector
         return total
 
     def reason_for(self, candidate: WorkflowCandidate) -> str:
-        """Build a human-readable reason from contributing selectors."""
-        parts: list[str] = []
-        for selector, _weight in self._selectors:
-            if selector.score(candidate) > 0:
-                parts.append(selector.name)
+        """Build a human-readable reason from cached contributing scores."""
+        scores = self._last_scores.get(candidate.issue_number)
+        if scores is None:
+            # Ensure cache is warm if score() was not called first.
+            self.score(candidate)
+            scores = self._last_scores.get(candidate.issue_number, {})
+        parts = [name for name, value in scores.items() if value > 0]
         return "\n".join(parts) if parts else self.name
 
 

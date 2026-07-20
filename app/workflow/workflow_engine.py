@@ -131,7 +131,7 @@ class WorkflowEngine:
             if is_ready(item, ready_statuses=self._ready_statuses)
         ]
         logger.info(
-            "Loading project items",
+            "Project items loaded",
             extra={
                 "total_items": board.total_items,
                 "ready_count": len(ready_items),
@@ -221,11 +221,7 @@ class WorkflowEngine:
         scored = candidate.model_copy(update={"score": score})
         logger.info(
             "Issue accepted",
-            extra={"issue_number": scored.issue_number, "score": scored.score},
-        )
-        logger.info(
-            "Selection score",
-            extra={"issue_number": scored.issue_number, "score": scored.score},
+            extra={"issue_number": scored.issue_number, "final_score": scored.score},
         )
         return scored
 

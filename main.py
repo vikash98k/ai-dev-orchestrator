@@ -1,11 +1,13 @@
-"""Temporary CLI entry point for workflow task selection.
+"""Temporary CLI entry point for workspace preparation.
 
-Configuration is loaded dynamically from the environment::
+Configuration::
 
     GITHUB_TOKEN
     GITHUB_OWNER
     GITHUB_REPO
     GITHUB_PROJECT_NUMBER
+    WORKSPACE_ROOT
+    GIT_DEFAULT_BRANCH   # optional override; defaults to repo default branch
 
 Run with::
 
@@ -17,9 +19,21 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.git import (
+    BranchCreationError,
+    GitError,
+    GitOperationError,
+    GitWorkspaceManager,
+    RepositoryCloneError,
+    RepositoryOpenError,
+    WorkspaceDirtyError,
+    WorkspaceInfo,
+    WorkspaceNotFoundError,
+)
 from app.github import (
     GitHubAPIError,
     GitHubAuthenticationError,
@@ -34,14 +48,13 @@ from app.github import (
 )
 from app.workflow import (
     NoEligibleTaskError,
+    SelectedTask,
     TaskSelectionError,
     WorkflowConfigurationError,
     WorkflowEngine,
-    WorkflowScanResult,
 )
 
 SEPARATOR = "=" * 52
-SECTION = "-" * 44
 
 
 def configure_logging() -> None:
@@ -81,68 +94,59 @@ def _require_project_number() -> int:
     return number
 
 
-def format_workflow_result(result: WorkflowScanResult) -> str:
-    """Build the user-facing workflow selection summary."""
-    lines = [
-        "Repository",
-        "",
-        result.repository,
-        "",
-        "Scanning workflow...",
-        "",
-        "Found:",
-        "",
-        f"{result.total_issues} Issues",
-        "",
-        "Ready:",
-        "",
-        str(result.ready_count),
-        "",
-        "Eligible:",
-        "",
-        str(result.eligible_count),
-        "",
-        SECTION,
-        "",
-    ]
+def _display_path(path: str) -> str:
+    """Render a path with ``~`` when under the user home directory."""
+    home = str(Path.home())
+    if path.startswith(home):
+        return "~" + path[len(home) :]
+    return path
 
-    selected = result.selected
-    if selected is None:
-        lines.extend(["No task selected", ""])
-        return "\n".join(lines)
 
-    ticket = selected.ticket_id or f"#{selected.issue_number}"
-    lines.extend(
+def format_workspace_ready(
+    repo_name: str,
+    default_branch: str,
+    feature_branch: str,
+    info: WorkspaceInfo,
+) -> str:
+    """Build the user-facing workspace preparation summary."""
+    return "\n".join(
         [
-            "Selected Task",
+            "Repository",
             "",
-            "Issue:",
+            repo_name,
             "",
-            ticket,
+            "Workspace",
             "",
-            "Title:",
+            "✓ Repository Found",
             "",
-            selected.title,
+            "Location",
             "",
-            "Reason:",
+            _display_path(info.local_path),
             "",
-            selected.selection_reason,
+            "Branch",
             "",
-            "Predicted Branch",
+            default_branch,
             "",
-            selected.branch_name,
+            "Pulling latest...",
             "",
-            "Score",
+            "✓ Up To Date",
             "",
-            str(selected.score),
+            "Creating Feature Branch...",
+            "",
+            f"✓ {feature_branch}",
+            "",
+            "Workspace Status",
+            "",
+            "Clean" if info.is_clean else "Dirty",
+            "",
+            "Ready for AI Implementation",
             "",
         ]
     )
-    return "\n".join(lines)
 
 
 def main() -> int:
-    """Authenticate, run workflow selection, and print the decision.
+    """Select a task, prepare the local Git workspace, and print status.
 
     Returns:
         Process exit code (``0`` on success, ``1`` on failure).
@@ -176,21 +180,38 @@ def main() -> int:
             issue_manager,
             project_manager,
         )
-        result = engine.scan_and_select(owner, repo, project_number)
-    except NoEligibleTaskError as exc:
-        logger.info("No eligible task: %s", exc)
-        print("Repository")
-        print()
-        print(os.getenv("GITHUB_REPO", ""))
-        print()
-        print("Scanning workflow...")
-        print()
-        print("No eligible Ready tasks found.")
-        print()
-        print(f"Detail: {exc}")
-        print()
-        print(SEPARATOR)
-        return 0
+
+        try:
+            selected: SelectedTask = engine.select_next_task(
+                owner,
+                repo,
+                project_number,
+            )
+        except NoEligibleTaskError:
+            logger.info("No eligible workflow task; using demo feature branch")
+            selected = SelectedTask(
+                issue_number=0,
+                title="Demo Workspace Preparation",
+                selection_reason="No Ready tasks — demo branch only",
+                branch_name="feature/DEMO-000-workspace-prep",
+                estimated_priority=None,
+                score=0.0,
+                ticket_id="DEMO-000",
+            )
+
+        repo_info = repository_manager.get_repository_info(owner, repo)
+        default_branch = (
+            os.getenv("GIT_DEFAULT_BRANCH") or ""
+        ).strip() or repo_info.default_branch
+        remote_url = repo_info.ssh_url or repo_info.clone_url
+
+        workspace_manager = GitWorkspaceManager()
+        info = workspace_manager.prepare_workspace(
+            repository_name=repo,
+            remote_url=remote_url,
+            feature_branch=selected.branch_name,
+            default_branch=default_branch,
+        )
     except (
         GitHubConfigurationError,
         GitHubAuthenticationError,
@@ -200,6 +221,13 @@ def main() -> int:
         GitHubProjectError,
         WorkflowConfigurationError,
         TaskSelectionError,
+        WorkspaceNotFoundError,
+        WorkspaceDirtyError,
+        BranchCreationError,
+        RepositoryCloneError,
+        RepositoryOpenError,
+        GitOperationError,
+        GitError,
     ) as exc:
         logger.error("Orchestrator failed: %s", exc)
         print("✗ Failed")
@@ -208,7 +236,7 @@ def main() -> int:
         print(SEPARATOR)
         return 1
 
-    print(format_workflow_result(result))
+    print(format_workspace_ready(repo, default_branch, selected.branch_name, info))
     print(SEPARATOR)
     return 0
 

@@ -16,6 +16,7 @@ from app.workflow.selectors import (
     PrioritySelector,
     RandomSelector,
     default_selector,
+    make_selector,
 )
 from app.workflow.workflow_engine import WorkflowEngine, predict_branch_name
 
@@ -36,5 +37,6 @@ __all__ = [
     "WorkflowError",
     "WorkflowScanResult",
     "default_selector",
+    "make_selector",
     "predict_branch_name",
 ]
