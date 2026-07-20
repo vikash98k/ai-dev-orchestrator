@@ -9,10 +9,14 @@ from app.github.exceptions import (
     GitHubAuthenticationError,
     GitHubConfigurationError,
     GitHubError,
+    GitHubRepositoryError,
+    RateLimitExceededError,
     RepositoryAccessDeniedError,
     RepositoryNotFoundError,
+    RepositoryValidationError,
 )
-from app.github.repository_manager import RepositoryInfo, RepositoryManager
+from app.github.repository_manager import RepositoryManager
+from app.github.schemas import RepositoryInfo
 
 __all__ = [
     "GitHubClient",
@@ -20,8 +24,11 @@ __all__ = [
     "GitHubAuthenticationError",
     "GitHubConfigurationError",
     "GitHubError",
+    "GitHubRepositoryError",
+    "RateLimitExceededError",
     "RepositoryAccessDeniedError",
     "RepositoryInfo",
     "RepositoryManager",
     "RepositoryNotFoundError",
+    "RepositoryValidationError",
 ]

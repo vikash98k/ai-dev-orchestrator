@@ -17,9 +17,24 @@ class GitHubAPIError(GitHubError):
     """Raised for unexpected or transient GitHub API failures."""
 
 
-class RepositoryNotFoundError(GitHubError):
+class GitHubRepositoryError(GitHubError):
+    """Base exception for repository-scoped failures."""
+
+
+class RepositoryNotFoundError(GitHubRepositoryError):
     """Raised when the requested GitHub repository does not exist."""
 
 
-class RepositoryAccessDeniedError(GitHubError):
+class RepositoryAccessDeniedError(GitHubRepositoryError):
     """Raised when the token cannot access the requested repository."""
+
+
+class RepositoryValidationError(GitHubRepositoryError):
+    """Raised when repository owner/name inputs are invalid."""
+
+
+class RateLimitExceededError(GitHubAPIError):
+    """Raised when the GitHub API rate limit has been exceeded.
+
+    Placeholder for a future retry/backoff strategy in the workflow engine.
+    """

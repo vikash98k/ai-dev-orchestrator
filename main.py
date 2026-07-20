@@ -24,13 +24,12 @@ from app.github import (
     GitHubAuthenticationError,
     GitHubClient,
     GitHubConfigurationError,
-    RepositoryAccessDeniedError,
+    GitHubRepositoryError,
     RepositoryInfo,
     RepositoryManager,
-    RepositoryNotFoundError,
 )
 
-SEPARATOR = "-" * 40
+SEPARATOR = "=" * 51
 
 
 def configure_logging() -> None:
@@ -76,13 +75,21 @@ def format_repository_summary(info: RepositoryInfo) -> str:
     fields = (
         ("Name", info.name),
         ("Owner", info.owner),
-        ("Default Branch", info.default_branch),
         ("Visibility", info.visibility.capitalize()),
+        ("Default Branch", info.default_branch),
         ("Language", info.language or "N/A"),
         ("Stars", info.stars),
+        ("Forks", info.forks),
         ("Open Issues", info.open_issues_count),
+        ("Created", info.created_at.date().isoformat()),
+        ("Updated", info.updated_at.date().isoformat()),
     )
-    lines = ["✓ Repository Found", "", "Repository", ""]
+    lines = [
+        "✓ Repository Found",
+        "",
+        "Repository Information",
+        "",
+    ]
     for label, value in fields:
         lines.extend([f"{label}:", str(value), ""])
     return "\n".join(lines)
@@ -108,7 +115,7 @@ def main() -> int:
     try:
         client = GitHubClient(load_env=False)
         client.verify_connection()
-        print("✓ Connected")
+        print("✓ Authentication Successful")
         print()
 
         owner = _require_env("GITHUB_OWNER")
@@ -123,8 +130,7 @@ def main() -> int:
         GitHubConfigurationError,
         GitHubAuthenticationError,
         GitHubAPIError,
-        RepositoryNotFoundError,
-        RepositoryAccessDeniedError,
+        GitHubRepositoryError,
     ) as exc:
         logger.error("Orchestrator failed: %s", exc)
         print("✗ Failed")
