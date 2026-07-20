@@ -1,4 +1,4 @@
-"""Temporary CLI entry point for GitHub Project V2 board status.
+"""Temporary CLI entry point for workflow task selection.
 
 Configuration is loaded dynamically from the environment::
 
@@ -16,9 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import sys
-from collections import defaultdict
 
 from dotenv import load_dotenv
 
@@ -31,26 +29,19 @@ from app.github import (
     GitHubProjectError,
     GitHubRepositoryError,
     IssueManager,
-    IssueSummary,
-    ProjectBoard,
     ProjectBoardManager,
-    ProjectItem,
     RepositoryManager,
+)
+from app.workflow import (
+    NoEligibleTaskError,
+    TaskSelectionError,
+    WorkflowConfigurationError,
+    WorkflowEngine,
+    WorkflowScanResult,
 )
 
 SEPARATOR = "=" * 52
-SECTION = "-" * 52
-_TICKET_RE = re.compile(r"^([A-Z][A-Z0-9]+-\d+)\b")
-
-# Preferred column order for the CLI board view.
-_STATUS_ORDER = (
-    "Ready",
-    "In Progress",
-    "Review",
-    "Testing",
-    "Done",
-    "Backlog",
-)
+SECTION = "-" * 44
 
 
 def configure_logging() -> None:
@@ -90,139 +81,68 @@ def _require_project_number() -> int:
     return number
 
 
-def _ticket_label(item: ProjectItem) -> str:
-    """Derive a display ticket id from the issue title, else ``#number``."""
-    match = _TICKET_RE.match(item.issue_title.strip())
-    if match:
-        return match.group(1)
-    return f"#{item.issue_number}"
-
-
-def _display_title(item: ProjectItem) -> str:
-    """Human title without a leading ticket id prefix."""
-    title = item.issue_title.strip()
-    match = _TICKET_RE.match(title)
-    if not match:
-        return title
-    remainder = title[match.end() :].lstrip(" :-")
-    return remainder or title
-
-
-def format_open_issues(repo_name: str, issues: list[IssueSummary]) -> str:
-    """Build the user-facing open-issues summary for the CLI.
-
-    Args:
-        repo_name: Repository name to display.
-        issues: Open issue summaries.
-
-    Returns:
-        Multi-line summary ready to print.
-    """
+def format_workflow_result(result: WorkflowScanResult) -> str:
+    """Build the user-facing workflow selection summary."""
     lines = [
         "Repository",
         "",
-        repo_name,
+        result.repository,
         "",
-        SECTION,
+        "Scanning workflow...",
         "",
-        "Open Issues",
+        "Found:",
         "",
-    ]
-
-    if not issues:
-        lines.extend(["(none)", "", "Total Open Issues: 0", ""])
-        return "\n".join(lines)
-
-    for issue in issues:
-        assignees = ", ".join(issue.assignees) if issue.assignees else "Unassigned"
-        labels = ", ".join(issue.labels) if issue.labels else "(none)"
-        lines.extend(
-            [
-                f"#{issue.number}",
-                "",
-                "Title:",
-                issue.title,
-                "",
-                "State:",
-                issue.state,
-                "",
-                "Labels:",
-                labels,
-                "",
-                "Assignees:",
-                assignees,
-                "",
-                "Created:",
-                issue.created_at.date().isoformat(),
-                "",
-                "URL:",
-                issue.url,
-                "",
-                SECTION,
-                "",
-            ]
-        )
-
-    lines.append(f"Total Open Issues: {len(issues)}")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def format_project_board(repo_name: str, board: ProjectBoard) -> str:
-    """Build the user-facing project board summary for the CLI.
-
-    Args:
-        repo_name: Repository name to display.
-        board: Loaded project board snapshot.
-
-    Returns:
-        Multi-line summary ready to print.
-    """
-    grouped: dict[str, list[ProjectItem]] = defaultdict(list)
-    for item in board.items:
-        key = item.status or "Unassigned"
-        grouped[key].append(item)
-
-    ordered_statuses: list[str] = []
-    for status in _STATUS_ORDER:
-        for key in list(grouped):
-            if key.casefold() == status.casefold():
-                ordered_statuses.append(key)
-                break
-    for key in sorted(grouped):
-        if key not in ordered_statuses:
-            ordered_statuses.append(key)
-
-    lines = [
-        "Repository:",
-        repo_name,
+        f"{result.total_issues} Issues",
         "",
-        "Project:",
-        board.project.title,
+        "Ready:",
+        "",
+        str(result.ready_count),
+        "",
+        "Eligible:",
+        "",
+        str(result.eligible_count),
         "",
         SECTION,
         "",
     ]
 
-    if not board.items:
-        lines.extend(["(no project items)", ""])
+    selected = result.selected
+    if selected is None:
+        lines.extend(["No task selected", ""])
         return "\n".join(lines)
 
-    for status in ordered_statuses:
-        lines.append(status.upper())
-        lines.append("")
-        for item in grouped[status]:
-            lines.append(_ticket_label(item))
-            lines.append(_display_title(item))
-            lines.append("")
-        lines.append(SECTION)
-        lines.append("")
-
+    ticket = selected.ticket_id or f"#{selected.issue_number}"
+    lines.extend(
+        [
+            "Selected Task",
+            "",
+            "Issue:",
+            "",
+            ticket,
+            "",
+            "Title:",
+            "",
+            selected.title,
+            "",
+            "Reason:",
+            "",
+            selected.selection_reason,
+            "",
+            "Predicted Branch",
+            "",
+            selected.branch_name,
+            "",
+            "Score",
+            "",
+            str(selected.score),
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
 def main() -> int:
-    """Authenticate, load the project board, and print status columns.
+    """Authenticate, run workflow selection, and print the decision.
 
     Returns:
         Process exit code (``0`` on success, ``1`` on failure).
@@ -239,8 +159,6 @@ def main() -> int:
     try:
         client = GitHubClient(load_env=False)
         client.verify_connection()
-        print("✓ Connected to GitHub")
-        print()
 
         owner = _require_env("GITHUB_OWNER")
         repo = _require_env("GITHUB_REPO")
@@ -253,7 +171,26 @@ def main() -> int:
             repository_manager,
             issue_manager,
         )
-        board = project_manager.get_board(owner, project_number)
+        engine = WorkflowEngine(
+            repository_manager,
+            issue_manager,
+            project_manager,
+        )
+        result = engine.scan_and_select(owner, repo, project_number)
+    except NoEligibleTaskError as exc:
+        logger.info("No eligible task: %s", exc)
+        print("Repository")
+        print()
+        print(os.getenv("GITHUB_REPO", ""))
+        print()
+        print("Scanning workflow...")
+        print()
+        print("No eligible Ready tasks found.")
+        print()
+        print(f"Detail: {exc}")
+        print()
+        print(SEPARATOR)
+        return 0
     except (
         GitHubConfigurationError,
         GitHubAuthenticationError,
@@ -261,6 +198,8 @@ def main() -> int:
         GitHubRepositoryError,
         GitHubIssueError,
         GitHubProjectError,
+        WorkflowConfigurationError,
+        TaskSelectionError,
     ) as exc:
         logger.error("Orchestrator failed: %s", exc)
         print("✗ Failed")
@@ -269,7 +208,7 @@ def main() -> int:
         print(SEPARATOR)
         return 1
 
-    print(format_project_board(repo, board))
+    print(format_workflow_result(result))
     print(SEPARATOR)
     return 0
 
