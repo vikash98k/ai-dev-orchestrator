@@ -11,6 +11,7 @@ lookup logic.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
@@ -327,7 +328,14 @@ class ProjectBoardManager:
 
     def _fetch_all_items(self, project: ProjectInfo) -> list[ProjectItem]:
         """Paginate all Project V2 items and map issue-backed rows."""
-        items: list[ProjectItem] = []
+        return [
+            mapped
+            for raw in self._iter_item_nodes(project)
+            if (mapped := self._map_item(raw)) is not None
+        ]
+
+    def _iter_item_nodes(self, project: ProjectInfo) -> Iterator[dict[str, Any]]:
+        """Yield raw item nodes for a project (pagination only)."""
         cursor: str | None = None
         while True:
             data = self._safe_graphql(
@@ -338,10 +346,8 @@ class ProjectBoardManager:
             )
             node = data.get("node") or {}
             connection = node.get("items") or {}
-            for raw in connection.get("nodes") or []:
-                mapped = self._map_item(raw)
-                if mapped is not None:
-                    items.append(mapped)
+
+            yield from connection.get("nodes") or []
 
             page_info = connection.get("pageInfo") or {}
             if not page_info.get("hasNextPage"):
@@ -349,7 +355,6 @@ class ProjectBoardManager:
             cursor = page_info.get("endCursor")
             if not cursor:
                 break
-        return items
 
     def _map_item(self, raw: dict[str, Any]) -> ProjectItem | None:
         """Map a GraphQL project item node to :class:`ProjectItem`."""
@@ -395,17 +400,23 @@ class ProjectBoardManager:
 
         for node in field_values.get("nodes") or []:
             field = node.get("field") or {}
-            field_name = str(field.get("name") or "").casefold()
+            field_name = (field.get("name") or "").strip().casefold()
             if not field_name:
                 continue
-            if field_name == "status" and node.get("name"):
-                status = str(node["name"])
-            elif field_name == "priority" and node.get("name"):
-                priority = str(node["name"])
-            elif field_name == "iteration" and node.get("title"):
-                iteration = str(node["title"])
-            elif field_name == "priority" and node.get("text"):
-                priority = str(node["text"])
+
+            if field_name == "status":
+                name = node.get("name")
+                if name:
+                    status = str(name)
+            elif field_name == "priority":
+                # Prefer single-select, fall back to text.
+                name = node.get("name") or node.get("text")
+                if name:
+                    priority = str(name)
+            elif field_name == "iteration":
+                title = node.get("title")
+                if title:
+                    iteration = str(title)
 
         return {"status": status, "priority": priority, "iteration": iteration}
 

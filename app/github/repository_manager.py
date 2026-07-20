@@ -48,6 +48,10 @@ class RepositoryManager:
         self._github_client = github_client
         logger.debug("RepositoryManager initialized")
 
+    def get_github_client(self) -> GitHubClient:
+        """Return the injected :class:`GitHubClient` used for API access."""
+        return self._github_client
+
     def get_repository(self, owner: str, repo: str) -> Repository:
         """Fetch a repository by owner and name.
 

@@ -30,6 +30,7 @@ from app.github.exceptions import (
     RepositoryAccessDeniedError,
     RepositoryNotFoundError,
 )
+from app.github.graphql import GraphQLTransport, PyGithubGraphQLTransport
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class GitHubClient:
         try:
             auth = Auth.Token(self._token)
             self._client = Github(auth=auth)
+            self._graphql: GraphQLTransport = PyGithubGraphQLTransport(self._client)
             logger.info("GitHub client created successfully")
         except Exception as exc:
             logger.exception("Failed to create authenticated GitHub client")
@@ -121,7 +123,7 @@ class GitHubClient:
             GitHubAPIError: For GraphQL, network, or unexpected failures.
         """
         try:
-            _headers, payload = self._client._Github__requester.graphql_query(
+            _headers, payload = self._graphql.execute(
                 query=query,
                 variables=variables or {},
             )
