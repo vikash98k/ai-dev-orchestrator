@@ -117,13 +117,18 @@ class IssueManager:
         repository = self._repository_manager.get_repository(owner, repo)
         full_name = f"{owner}/{repo}"
         logger.info(
-            "Loading issues",
+            "Loading issue",
             extra={"repository": full_name, "issue_number": issue_number},
         )
 
         try:
             issue = repository.get_issue(issue_number)
-        except Exception as exc:
+        except (
+            UnknownObjectException,
+            RateLimitExceededException,
+            GithubException,
+            RequestException,
+        ) as exc:
             self._raise_for_issue_error(exc, full_name, issue_number=issue_number)
 
         detail = IssueDetail.from_issue(issue)
@@ -204,40 +209,74 @@ class IssueManager:
         owner: str,
         repo: str,
         keyword: str,
+        *,
+        limit: int = 100,
     ) -> list[IssueSummary]:
         """Search issues whose title or body contains a keyword.
 
-        Matching is case-insensitive and performed against fetched issues
-        (read-only; no GitHub search API side effects).
+        Uses the GitHub Search API (bounded by ``limit``) instead of scanning
+        every repository issue in Python.
 
         Args:
             owner: GitHub user or organization login.
             repo: Repository name.
             keyword: Substring to look for in title or body.
+            limit: Maximum number of matching issues to return (default 100).
 
         Returns:
-            Matching issue summaries.
+            Matching issue summaries (pull requests excluded).
 
         Raises:
-            IssueValidationError: If ``keyword`` is blank.
+            IssueValidationError: If ``keyword`` is blank or ``limit`` is invalid.
+            RateLimitExceededError: If the API rate limit is exceeded.
+            GitHubAPIError: For unexpected or transient API failures.
         """
-        normalized = self._require_non_empty(keyword, "keyword").lower()
+        normalized = self._require_non_empty(keyword, "keyword")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise IssueValidationError("limit must be a positive integer.")
+
+        # Ensure the repository exists / is accessible before searching.
+        self._repository_manager.get_repository(owner, repo)
+
+        # Quote multi-word keywords; strip embedded quotes to keep the query valid.
+        safe_keyword = normalized.replace('"', " ").strip()
+        query = f'repo:{owner}/{repo} is:issue in:title,body "{safe_keyword}"'
         logger.info(
             "Filtering issues",
-            extra={"repository": f"{owner}/{repo}", "keyword": normalized},
+            extra={
+                "repository": f"{owner}/{repo}",
+                "keyword": safe_keyword,
+                "limit": limit,
+            },
         )
 
-        repository = self._repository_manager.get_repository(owner, repo)
-        issues = self._fetch_issues(repository, owner, repo, state="all")
-        matches: list[IssueSummary] = []
-        for issue in issues:
-            if issue.pull_request is not None:
-                continue
-            title = (issue.title or "").lower()
-            body = (issue.body or "").lower()
-            if normalized in title or normalized in body:
+        github = self._repository_manager.get_github_client().get_client()
+        try:
+            results = github.search_issues(query=query)
+            matches: list[IssueSummary] = []
+            for issue in results:
+                if len(matches) >= limit:
+                    break
+                if issue.pull_request is not None:
+                    continue
                 matches.append(IssueSummary.from_issue(issue))
-        return matches
+            logger.info(
+                "Issues loaded",
+                extra={
+                    "repository": f"{owner}/{repo}",
+                    "keyword": safe_keyword,
+                    "count": len(matches),
+                },
+            )
+            return matches
+        except (
+            UnknownObjectException,
+            RateLimitExceededException,
+            GithubException,
+            RequestException,
+        ) as exc:
+            self._raise_for_issue_error(exc, f"{owner}/{repo}")
+            raise  # pragma: no cover
 
     def _list_issue_summaries(
         self,
@@ -264,7 +303,7 @@ class IssueManager:
             if issue.pull_request is None
         ]
         logger.info(
-            "Issue loaded",
+            "Issues loaded",
             extra={
                 "repository": f"{owner}/{repo}",
                 "state": state,
@@ -302,7 +341,12 @@ class IssueManager:
 
         try:
             return list(repository.get_issues(**kwargs))
-        except Exception as exc:
+        except (
+            UnknownObjectException,
+            RateLimitExceededException,
+            GithubException,
+            RequestException,
+        ) as exc:
             self._raise_for_issue_error(exc, full_name)
             raise  # pragma: no cover
 
@@ -360,7 +404,7 @@ class IssueManager:
                 ) from exc
             logger.error(
                 "GitHub API failures",
-                extra={"target": target, "status": status, "message": str(exc)},
+                extra={"target": target, "status": status, "detail": str(exc)},
             )
             raise GitHubAPIError(
                 f"Unexpected GitHub API error for issues on '{target}' "
@@ -370,16 +414,12 @@ class IssueManager:
         if isinstance(exc, RequestException):
             logger.error(
                 "GitHub API failures",
-                extra={"target": target, "message": str(exc), "kind": "network"},
+                extra={"target": target, "detail": str(exc), "kind": "network"},
             )
             raise GitHubAPIError(
                 f"Network failure while accessing issues for '{target}': {exc}"
             ) from exc
 
-        logger.error(
-            "GitHub API failures",
-            extra={"target": target, "message": str(exc), "kind": type(exc).__name__},
+        raise AssertionError(
+            f"Unhandled exception type passed to _raise_for_issue_error: {type(exc)!r}"
         )
-        raise GitHubAPIError(
-            f"Unexpected error while accessing issues for '{target}': {exc}"
-        ) from exc
