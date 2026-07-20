@@ -12,13 +12,21 @@ import os
 from typing import TypedDict
 
 from dotenv import load_dotenv
-from github import Auth, Github, GithubException
+from github import (
+    Auth,
+    Github,
+    GithubException,
+    RateLimitExceededException,
+    UnknownObjectException,
+)
 from github.Repository import Repository
+from requests.exceptions import RequestException
 
 from app.github.exceptions import (
     GitHubAPIError,
     GitHubAuthenticationError,
     GitHubConfigurationError,
+    RateLimitExceededError,
     RepositoryAccessDeniedError,
     RepositoryNotFoundError,
 )
@@ -138,30 +146,65 @@ class GitHubClient:
         Raises:
             RepositoryNotFoundError: If the repository does not exist.
             RepositoryAccessDeniedError: If the token cannot access it.
+            RateLimitExceededError: If the GitHub API rate limit is hit.
             GitHubAPIError: For unexpected or transient API failures.
         """
         try:
             return self._client.get_repo(full_name)
+        except UnknownObjectException as exc:
+            logger.error(
+                "Repository not found",
+                extra={"repository": full_name, "status": exc.status},
+            )
+            raise RepositoryNotFoundError(
+                f"Repository '{full_name}' was not found."
+            ) from exc
+        except RateLimitExceededException as exc:
+            # Placeholder: future workflow engine can attach retry/backoff here.
+            logger.error(
+                "GitHub API rate limit exceeded",
+                extra={"repository": full_name, "status": exc.status},
+            )
+            raise RateLimitExceededError(
+                f"GitHub API rate limit exceeded while accessing "
+                f"repository '{full_name}'."
+            ) from exc
         except GithubException as exc:
             status = exc.status
+            if status == 404:
+                logger.error(
+                    "Repository not found",
+                    extra={"repository": full_name, "status": status},
+                )
+                raise RepositoryNotFoundError(
+                    f"Repository '{full_name}' was not found."
+                ) from exc
+            if status in {401, 403}:
+                logger.error(
+                    "Permission denied",
+                    extra={"repository": full_name, "status": status},
+                )
+                raise RepositoryAccessDeniedError(
+                    f"Access denied for repository '{full_name}' "
+                    f"(status={status}). Check token permissions."
+                ) from exc
             logger.error(
-                "GitHub repository request failed",
+                "Unexpected API errors",
                 extra={
                     "repository": full_name,
                     "status": status,
                     "message": str(exc),
                 },
             )
-            if status == 404:
-                raise RepositoryNotFoundError(
-                    f"Repository '{full_name}' was not found."
-                ) from exc
-            if status in {401, 403}:
-                raise RepositoryAccessDeniedError(
-                    f"Access denied for repository '{full_name}' "
-                    f"(status={status}). Check token permissions."
-                ) from exc
             raise GitHubAPIError(
                 f"Unexpected GitHub API error for repository '{full_name}' "
                 f"(status={status}): {exc.data}"
+            ) from exc
+        except RequestException as exc:
+            logger.error(
+                "Unexpected API errors",
+                extra={"repository": full_name, "message": str(exc)},
+            )
+            raise GitHubAPIError(
+                f"Network failure while accessing repository '{full_name}': {exc}"
             ) from exc

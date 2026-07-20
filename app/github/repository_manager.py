@@ -1,77 +1,35 @@
 """Reusable repository manager for GitHub repository access.
 
-This module belongs to the infrastructure layer. It depends on
-:class:`~app.github.client.GitHubClient` for authentication and repository
-fetching, and exposes a narrow metadata surface for higher-level services.
+This module is the foundation for future Issue, Pull Request, Branch, and
+Workflow managers. It depends on :class:`~app.github.client.GitHubClient`
+via dependency injection and never instantiates PyGithub directly.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import datetime
 
 from github.Repository import Repository
 
 from app.github.client import GitHubClient
+from app.github.exceptions import (
+    GitHubAPIError,
+    GitHubRepositoryError,
+    RepositoryValidationError,
+)
+from app.github.schemas import RepositoryInfo
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class RepositoryInfo:
-    """Metadata for a GitHub repository."""
-
-    name: str
-    owner: str
-    description: str | None
-    default_branch: str
-    visibility: str
-    stars: int
-    forks: int
-    open_issues_count: int
-    language: str | None
-    created_at: datetime
-    updated_at: datetime
-    clone_url: str
-    ssh_url: str
-    private: bool
-
-    @classmethod
-    def from_repository(cls, repository: Repository) -> RepositoryInfo:
-        """Map a PyGithub ``Repository`` into a structured metadata model.
-
-        Args:
-            repository: Authenticated PyGithub repository object.
-
-        Returns:
-            Immutable :class:`RepositoryInfo` populated from the API object.
-        """
-        return cls(
-            name=repository.name,
-            owner=repository.owner.login,
-            description=repository.description,
-            default_branch=repository.default_branch,
-            visibility=repository.visibility,
-            stars=repository.stargazers_count,
-            forks=repository.forks_count,
-            open_issues_count=repository.open_issues_count,
-            language=repository.language,
-            created_at=repository.created_at,
-            updated_at=repository.updated_at,
-            clone_url=repository.clone_url,
-            ssh_url=repository.ssh_url,
-            private=repository.private,
-        )
 
 
 class RepositoryManager:
     """Access and inspect GitHub repositories.
 
     Responsibilities:
-        - Fetch repository objects via the authenticated client
-        - Validate that a repository exists and is accessible
-        - Expose structured repository metadata
+        - Validate repository identifiers
+        - Fetch repository objects via the injected client
+        - Check repository existence without raising to callers
+        - Expose strongly typed repository metadata
 
     Example:
         >>> github = GitHubClient()
@@ -84,9 +42,8 @@ class RepositoryManager:
         """Initialize with an authenticated GitHub client.
 
         Args:
-            github_client: Injected :class:`GitHubClient` instance used for
-                all API calls. Authentication and error translation remain
-                the client's concern.
+            github_client: Injected :class:`GitHubClient` used for all API
+                calls. Authentication remains the client's concern.
         """
         self._github_client = github_client
         logger.debug("RepositoryManager initialized")
@@ -102,29 +59,71 @@ class RepositoryManager:
             The authenticated PyGithub ``Repository`` object.
 
         Raises:
+            RepositoryValidationError: If ``owner`` or ``repo`` is invalid.
             RepositoryNotFoundError: If the repository does not exist.
             RepositoryAccessDeniedError: If the token cannot access it.
+            RateLimitExceededError: If the API rate limit is exceeded.
             GitHubAPIError: For unexpected or transient API failures.
         """
-        full_name = f"{owner}/{repo}"
-        logger.info("Fetching repository", extra={"repository": full_name})
+        full_name = self._validated_full_name(owner, repo)
+        logger.info("Repository requested", extra={"repository": full_name})
         repository = self._github_client.get_repository(full_name)
         logger.info("Repository found", extra={"repository": full_name})
         return repository
 
-    def get_repository_info(self, owner: str, repo: str) -> RepositoryInfo:
-        """Fetch and map repository metadata.
+    def repository_exists(self, owner: str, repo: str) -> bool:
+        """Return whether a repository exists and is accessible.
+
+        This method never raises. Invalid identifiers, missing repositories,
+        permission errors, and unexpected API failures all resolve to
+        ``False``.
 
         Args:
             owner: GitHub user or organization login.
             repo: Repository name.
 
         Returns:
-            Structured :class:`RepositoryInfo` for the target repository.
+            ``True`` if the repository can be fetched; otherwise ``False``.
+        """
+        try:
+            self.get_repository(owner, repo)
+            return True
+        except (GitHubRepositoryError, GitHubAPIError, ValueError) as exc:
+            logger.info(
+                "Repository existence check failed",
+                extra={
+                    "owner": owner,
+                    "repo": repo,
+                    "reason": type(exc).__name__,
+                },
+            )
+            return False
+        except Exception as exc:
+            logger.warning(
+                "Unexpected error during repository existence check",
+                extra={
+                    "owner": owner,
+                    "repo": repo,
+                    "reason": type(exc).__name__,
+                },
+            )
+            return False
+
+    def get_repository_info(self, owner: str, repo: str) -> RepositoryInfo:
+        """Fetch and map repository metadata into a Pydantic schema.
+
+        Args:
+            owner: GitHub user or organization login.
+            repo: Repository name.
+
+        Returns:
+            Validated :class:`~app.github.schemas.RepositoryInfo`.
 
         Raises:
+            RepositoryValidationError: If ``owner`` or ``repo`` is invalid.
             RepositoryNotFoundError: If the repository does not exist.
             RepositoryAccessDeniedError: If the token cannot access it.
+            RateLimitExceededError: If the API rate limit is exceeded.
             GitHubAPIError: For unexpected or transient API failures.
         """
         repository = self.get_repository(owner, repo)
@@ -138,3 +137,29 @@ class RepositoryManager:
             },
         )
         return info
+
+    @staticmethod
+    def _validated_full_name(owner: str, repo: str) -> str:
+        """Normalize and validate owner/repo identifiers.
+
+        Args:
+            owner: GitHub user or organization login.
+            repo: Repository name.
+
+        Returns:
+            Canonical ``owner/repo`` string.
+
+        Raises:
+            RepositoryValidationError: If either identifier is blank.
+        """
+        normalized_owner = owner.strip() if isinstance(owner, str) else ""
+        normalized_repo = repo.strip() if isinstance(repo, str) else ""
+        if not normalized_owner or not normalized_repo:
+            raise RepositoryValidationError(
+                "Repository owner and name must be non-empty strings."
+            )
+        if "/" in normalized_owner or "/" in normalized_repo:
+            raise RepositoryValidationError(
+                "Owner and repository name must not contain '/'."
+            )
+        return f"{normalized_owner}/{normalized_repo}"
